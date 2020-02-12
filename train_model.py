@@ -26,7 +26,7 @@ print("Number of training/test patches:", (len(train_indices),len(test_indices))
 net = ProbabilisticUnet(input_channels=1, num_classes=1, num_filters=[32,64,128,192], latent_dim=2, no_convs_fcomb=4, beta=10.0)
 net.to(device)
 optimizer = torch.optim.Adam(net.parameters(), lr=1e-4, weight_decay=0)
-epochs = 1  # 训练周期
+epochs = 10  # 训练周期
 
 
 # training
@@ -49,10 +49,9 @@ for epoch in range(epochs):
         # evaluate
 
 
-
 # save the trained net model
 print("saving the trained net model")
-save_model(net, path='model/unet_2.pt')
+save_model(net, path='model/unet_3.pt')
 
 # # save the loss curve
 # show_curve(losses, title='train_loss')

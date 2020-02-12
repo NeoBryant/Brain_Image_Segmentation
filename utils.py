@@ -5,6 +5,9 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import numpy as np
 
+#%matplotlib inline
+import matplotlib.pyplot as plt
+import matplotlib
 
 def truncated_normal_(tensor, mean=0, std=1):
     size = tensor.shape
@@ -64,3 +67,53 @@ def show_curve(y1s, title='loss'):
     plt.show()
     plt.close()
     print('Saved figure: picture/{}.png'.format(title))
+
+
+def bayes_uncertain(image_np, label_np, results):
+    """
+    Keyword arguments:
+    image_np -- 原图
+    label_np -- 标签
+    results -- 同一张图片的不同预测结果
+    Return: 预测结果的均值和方差
+    """
+    results = np.array(results) # list->numpy
+    shape = results.shape
+    # mean_result
+    # variance_result
+
+    mean_result = np.zeros((128, 128))      # 均值
+    variance_result = np.zeros((128, 128))  # 方差
+
+    # 计算均值
+    for i in range(shape[0]):
+        mean_result += results[i]
+    mean_result /= shape[0]
+
+    # 计算方差
+    for i in range(shape[0]):
+        variance_result += np.square(mean_result-results[i])
+    variance_result /= shape[0]
+    
+    # 显示保存图片
+    fig, ax = plt.subplots(2,2, sharey=True, figsize=(14,12))
+
+    ax[0][0].set_title("Original data")
+    ax[0][1].set_title("Ground Truth")
+    ax[1][0].set_title("mean predicted result")
+    ax[1][1].set_title("variance")
+
+    ax00 = ax[0][0].imshow(image_np, aspect="auto", cmap="gray")
+    ax01 = ax[0][1].imshow(label_np, aspect="auto")
+    ax10 = ax[1][0].imshow(mean_result, aspect="auto")
+    ax11 = ax[1][1].imshow(variance_result, aspect="auto")
+
+    fig.colorbar(ax00, ax=ax[0][0])
+    fig.colorbar(ax01, ax=ax[0][1])
+    fig.colorbar(ax10, ax=ax[1][0])
+    fig.colorbar(ax11, ax=ax[1][1])
+    
+    # 保存
+    plt.savefig('picture/mean_variance.jpg')
+
+    
