@@ -2,23 +2,28 @@ import torch
 import numpy as np
 from torch.utils.data import DataLoader
 from torch.utils.data.sampler import SubsetRandomSampler
-
 from load_Brain_data import BrainS18Dataset
+
 from probabilistic_unet import ProbabilisticUnet
-from utils import l2_regularisation, label2multichannel
+from utils import bayes_uncertain, label2multichannel
 from save_load_net import save_model, load_model
 
-from evaluate import evaluate
+#%matplotlib inline
+import matplotlib.pyplot as plt
+import matplotlib
 
 # 参数
 class_num = 9 # 选择分割类别数
-epochs = 50  # 训练周期
-learning_rate = 1e-4 # 学习率
-train_batch_size = 16 # 训练
+predict_time = 1 # 每张图预测次数
+
+train_batch_size = 1 # 训练
 test_batch_size = 1 # 预测
+
+model_name = 'unet_9.pt' # 选择模型
 device = torch.device('cuda:5' if torch.cuda.is_available() else 'cpu') # 选择cpu
 
-# 数据集
+
+# 选择数据集
 dataset = BrainS18Dataset(root_dir='data/BrainS18', class_num=class_num)
 
 # 数据划分并设置sampler（（固定训练集和测试集））
@@ -33,64 +38,51 @@ train_indices, test_indices = indices[split:], indices[:split]
 train_sampler = SubsetRandomSampler(train_indices)
 test_sampler = SubsetRandomSampler(test_indices)
 
-# 数据加载器
-train_loader = DataLoader(dataset, batch_size=train_batch_size, sampler=train_sampler) # 训练
-train_eval_loader = DataLoader(dataset, batch_size=test_batch_size, sampler=train_sampler) # 评估
-test_loader = DataLoader(dataset, batch_size=test_batch_size, sampler=test_sampler) # 评估
+# 加载器
+train_loader = DataLoader(dataset, batch_size=train_batch_size, sampler=train_sampler)
+test_loader = DataLoader(dataset, batch_size=test_batch_size, sampler=test_sampler)
 print("Number of training/test patches:", (len(train_indices),len(test_indices)))
 
-# 网络模型
-net = ProbabilisticUnet(input_channels=1, 
+# 加载已经训练好的网络进行预测
+model = ProbabilisticUnet(input_channels=1, 
                         num_classes=class_num, 
                         num_filters=[32,64,128,192], 
                         latent_dim=2, 
                         no_convs_fcomb=4, 
                         beta=10.0)
-net.to(device)
+net = load_model(model=model, 
+                path='model/{}'.format(model_name), 
+                device=device)
 
-# 优化器
-optimizer = torch.optim.Adam(net.parameters(), 
-                            lr=learning_rate, 
-                            weight_decay=0)
-# 训练模型并保存
-try:
-    # 训练
-    for epoch in range(epochs):
-        print("Epoch {}".format(epoch))
-        # 训练
-        net.train()
-        losses = 0 # 计算平均loss值
-        for step, (patch, mask, _) in enumerate(train_loader): 
+# 预测
+with torch.no_grad():
+    for step, (patch, mask, _) in enumerate(test_loader): 
+        if step < 1:
+            print("predicting picture {}...".format(step))
+            results = [] # 保持每次预测的结果
+            
+            ## show the image
+            label_np = mask.numpy()
+            image_np = patch.numpy()
+
+            ## through the net to predict
             patch = patch.to(device)
             mask = mask.to(device)
-            # mask = torch.unsqueeze(mask,1) (batch_size,240,240)->(batch_size,1,240,240)
-            net.forward(patch, mask, training=True)
-            # label通道1->9
-            mask = label2multichannel(mask.cpu(), class_num)
-            mask = mask.to(device)
-            elbo = net.elbo(mask)
-            ###
-            reg_loss = l2_regularisation(net.posterior) + l2_regularisation(net.prior) + l2_regularisation(net.fcomb.layers)
-            loss = -elbo + 1e-5 * reg_loss
-            losses += loss
-            if step%10 == 0:
-                print("-- [step {}] loss: {}".format(step, loss))
-                # evaluate(net, test_loader, device, test=True)    
-                # break
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+            mask = torch.unsqueeze(mask,1)
+            
+            for i in range(predict_time):
+                net.forward(patch, None, training=False)
+                result = net.sample(testing=True).cpu()
 
-        # 评估
-        losses /= (step+1)
-        print("Loss (Train): {}".format(losses))
-        # evaluate(net, train_eval_loader, device, test=False)     
-        evaluate(net, test_loader, device, test=True)        
-except KeyboardInterrupt as e:
-    print('KeyboardInterrupt: {}'.format(e))
-except Exception as e:
-    print('Exception: {}'.format(e))
-finally:
-    # 保存模型
-    print("saving the trained net model -- unet_{}.pt".format(class_num))
-    save_model(net, path='model/unet_{}.pt'.format(class_num))
+                ## show the image
+                result_np = result.detach().numpy()   
+                
+                # # 保存这次预测结果
+                results.append(result_np)
+
+                
+            # 计算方差和均值
+            # bayes_uncertain(image_np, label_np, results, step, the_class)   
+            
+        else:
+            break

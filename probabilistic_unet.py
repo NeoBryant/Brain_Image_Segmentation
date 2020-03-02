@@ -6,7 +6,8 @@ from utils import init_weights,init_weights_orthogonal_normal, l2_regularisation
 import torch.nn.functional as F
 from torch.distributions import Normal, Independent, kl
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+# 选择gpu，需要与train文件一致
+device = torch.device('cuda:5' if torch.cuda.is_available() else 'cpu')
 
 class Encoder(nn.Module):
     """
@@ -19,16 +20,19 @@ class Encoder(nn.Module):
     def __init__(self, input_channels, num_filters, no_convs_per_block, initializers, padding=True, posterior=False):
         super(Encoder, self).__init__()
         self.contracting_path = nn.ModuleList()
-        self.input_channels = input_channels
+        self.input_channels = input_channels # 输入的通道数
         self.num_filters = num_filters
 
         if posterior:
+            #为了适应在通道轴上串联的遮罩，我们增加了input_channels。
             #To accomodate for the mask that is concatenated at the channel axis, we increase the input_channels.
             self.input_channels += 1
 
         layers = []
         for i in range(len(self.num_filters)):
             """
+            确定此块中conv层的input_dim和output_dim。 第一层是输入*输出，
+            所有后续层都是输出*输出。
             Determine input_dim and output_dim of conv layers in this block. The first layer is input x output,
             All the subsequent layers are output x output.
             """
@@ -172,8 +176,8 @@ class Fcomb(nn.Module):
 
     def forward(self, feature_map, z):
         """
-        Z是batch_sizexlatent_dim，feature_map是batch_sizexno_channels * H * W。
-        因此，将Z广播到batch_sizexlatent_dim * H * W。 行为与tf.tile（已验证）完全相同
+        Z是batch_size * latent_dim，feature_map是batch_sizexno_channels * H * W。
+        因此，将Z广播到batch_size * latent_dim * H * W。 行为与tf.tile（已验证）完全相同
 
         Z is batch_sizexlatent_dim and feature_map is batch_sizexno_channelsxHxW.
         So broadcast Z to batch_sizexlatent_dimxHxW. Behavior is exactly the same as tf.tile (verified)
@@ -197,7 +201,7 @@ class ProbabilisticUnet(nn.Module):
      num_classes：要预测的类数
      num_filters：是过滤器层数的列表一致性
      latent_dim：隐空间的维度
-     no_cons_per_block：先验和后验（卷积）编码器中的每个块无转换
+     no_cons_per_block：先验和后验（卷积）编码器中的每个块卷积编号
 
     A probabilistic UNet (https://arxiv.org/abs/1806.05034) implementation.
     input_channels: the number of channels in the image (1 for greyscale and 3 for RGB)
@@ -209,20 +213,40 @@ class ProbabilisticUnet(nn.Module):
 
     def __init__(self, input_channels=1, num_classes=1, num_filters=[32,64,128,192], latent_dim=6, no_convs_fcomb=4, beta=10.0):
         super(ProbabilisticUnet, self).__init__()
-        self.input_channels = input_channels
-        self.num_classes = num_classes
-        self.num_filters = num_filters
-        self.latent_dim = latent_dim
-        self.no_convs_per_block = 3
+        self.input_channels = input_channels # 输入图像通道数
+        self.num_classes = num_classes # 分割类别数
+        self.num_filters = num_filters # filter数
+        self.latent_dim = latent_dim # 隐空间维度
+        self.no_convs_per_block = 3 
         self.no_convs_fcomb = no_convs_fcomb
-        self.initializers = {'w':'he_normal', 'b':'normal'}
+        self.initializers = {'w':'he_normal', 'b':'normal'} # 初始化
         self.beta = beta
         self.z_prior_sample = 0
-
-        self.unet = Unet(self.input_channels, self.num_classes, self.num_filters, self.initializers, apply_last_layer=False, padding=True).to(device)
-        self.prior = AxisAlignedConvGaussian(self.input_channels, self.num_filters, self.no_convs_per_block, self.latent_dim,  self.initializers,).to(device)
-        self.posterior = AxisAlignedConvGaussian(self.input_channels, self.num_filters, self.no_convs_per_block, self.latent_dim, self.initializers, posterior=True).to(device)
-        self.fcomb = Fcomb(self.num_filters, self.latent_dim, self.input_channels, self.num_classes, self.no_convs_fcomb, {'w':'orthogonal', 'b':'normal'}, use_tile=True).to(device)
+        
+        self.unet = Unet(self.input_channels, 
+                        self.num_classes, 
+                        self.num_filters, 
+                        self.initializers, 
+                        apply_last_layer=False, 
+                        padding=True).to(device)
+        self.prior = AxisAlignedConvGaussian(self.input_channels, 
+                                            self.num_filters, 
+                                            self.no_convs_per_block, 
+                                            self.latent_dim,  
+                                            self.initializers,).to(device)
+        self.posterior = AxisAlignedConvGaussian(self.input_channels, 
+                                                self.num_filters, 
+                                                self.no_convs_per_block, 
+                                                self.latent_dim, 
+                                                self.initializers, 
+                                                posterior=True).to(device)
+        self.fcomb = Fcomb(self.num_filters, 
+                            self.latent_dim, 
+                            self.input_channels, 
+                            self.num_classes, 
+                            self.no_convs_fcomb, 
+                            {'w':'orthogonal', 'b':'normal'}, 
+                            use_tile=True).to(device)
 
     def forward(self, patch, segm, training=True):
         """
@@ -236,8 +260,6 @@ class ProbabilisticUnet(nn.Module):
             self.posterior_latent_space = self.posterior.forward(patch, segm)
         self.prior_latent_space = self.prior.forward(patch)
         self.unet_features = self.unet.forward(patch,False)
-
-        # return self.unet_features
 
     def sample(self, testing=False):
         """
